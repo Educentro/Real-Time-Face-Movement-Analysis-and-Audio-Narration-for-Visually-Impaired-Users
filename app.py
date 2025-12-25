@@ -17,6 +17,7 @@ def gen_frames():
         results = detect_face(frame)
 
         if results.multi_face_landmarks:
+            face_count = len(results.multi_face_landmarks)
             for face_landmarks in results.multi_face_landmarks:
                 mp_draw.draw_landmarks(
                     frame,
@@ -24,8 +25,35 @@ def gen_frames():
                     mp.solutions.face_mesh.FACEMESH_CONTOURS
                 )
 
-            cv2.putText(frame, "Face Detected", (30, 50),
+            cv2.putText(frame,f"Face Detected:{face_count}", (30, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            h, w, _ = frame.shape
+
+            for face_landmarks in results.multi_face_landmarks:
+    # Get nose tip (landmark 1 is reliable)
+                nose_x = int(face_landmarks.landmark[1].x * w)
+                if nose_x < w / 3:
+                    position = "Left"
+                elif nose_x < 2 * w / 3:
+                    position = "Center"
+                else:
+                    position = "Right"
+                mp_draw.draw_landmarks(
+                     frame,
+                    face_landmarks,
+                    mp.solutions.face_mesh.FACEMESH_CONTOURS
+    )
+
+                cv2.putText(
+        frame,
+        f"Position: {position}",
+        (30, 90),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (255, 0, 0),
+        2
+    )
+
 
         ret, buffer = cv2.imencode('.jpg', frame)
         frame = buffer.tobytes()
@@ -40,7 +68,10 @@ def video():
 
 @app.route('/')
 def home():
-    return "Camera backend running 🎥"
+    return Response(
+        gen_frames(),
+        mimetype='multipart/x-mixed-replace; boundary=frame'
+    )
 
 if __name__ == "__main__":
     app.run(debug=True)
