@@ -1,5 +1,9 @@
+from collections import deque
 from flask import Flask, Response
 import cv2
+
+gesture_buffer = deque(maxlen=10)
+stable_gesture = None
 
 app = Flask(__name__)
 

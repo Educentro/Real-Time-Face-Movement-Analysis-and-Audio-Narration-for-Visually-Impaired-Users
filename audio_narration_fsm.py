@@ -1,14 +1,25 @@
+"""
+Day 5 – FINAL FROZEN VERSION
+Gesture Detection + Meaning + Audio Narration
+Rule-based FSM (No ML, No Dataset)
+Status: Stable and Demo-Ready
+"""
 import cv2
 import mediapipe as mp
 from collections import deque
 import pyttsx3
 import time
 
-def speak(text):
-    global last_audio_time
+last_spoken_gesture = None
+last_spoken_time = 0
+AUDIO_COOLDOWN = 2.5  # seconds
 
-    current_time = time.time()
-    if current_time - last_audio_time < AUDIO_COOLDOWN:
+
+def speak(text):
+    global last_spoken_gesture
+
+    # If same gesture already spoken → do nothing
+    if text == last_spoken_gesture:
         return
 
     engine = pyttsx3.init()
@@ -17,11 +28,8 @@ def speak(text):
     engine.runAndWait()
     engine.stop()
 
-    last_audio_time = current_time
+    last_spoken_gesture = text
 
-
-last_audio_time = 0
-AUDIO_COOLDOWN = 1.2  # seconds
 
 # ---------------- CAMERA ----------------
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -113,9 +121,9 @@ while True:
     if gesture:
         gesture_buffer.append(gesture)
 
-        if gesture_buffer.count(gesture) >= 4 and gesture != previous_gesture:
+        if gesture_buffer.count(gesture) >= 4:
             speak(gesture)
-            previous_gesture = gesture
+            
 
         cv2.putText(
             frame,
@@ -129,6 +137,7 @@ while True:
     else:
         gesture_buffer.clear()
         previous_gesture = None
+        last_spoken_gesture = None
 
     cv2.imshow("Day 4 - Gesture to Audio", frame)
 
