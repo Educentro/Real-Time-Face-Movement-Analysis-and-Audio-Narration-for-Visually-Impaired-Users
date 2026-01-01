@@ -1,49 +1,78 @@
 import os
 import cv2
-import numpy as np
 import mediapipe as mp
+import numpy as np
+import pickle
+from tqdm import tqdm
 
-DATASET_PATH = r"C:\Users\mawli\Downloads\dataset_images\Data"
-OUTPUT_PATH = "dataset_processed"
+# Paths
+DATASET_DIR = "dataset"
+OUTPUT_FILE = "features.pkl"
 
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1)
+hands = mp_hands.Hands(
+    static_image_mode=True,
+    max_num_hands=1,
+    min_detection_confidence=0.3
+)
 
-X, y = [], []
+X = []
+y = []
 
-def normalize(landmarks):
-    landmarks = landmarks[:, :2]
-    landmarks = landmarks - landmarks[0]
-    max_dist = np.max(np.linalg.norm(landmarks, axis=1))
-    if max_dist > 0:
-        landmarks /= max_dist
-    return landmarks.flatten()
+def extract_landmarks(image_path):
+    image = cv2.imread(image_path)
+    if image is None:
+        return None
 
-for label in os.listdir(DATASET_PATH):
-    label_path = os.path.join(DATASET_PATH, label)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = hands.process(image_rgb)
+
+    if not results.multi_hand_landmarks:
+        return None
+
+    hand_landmarks = results.multi_hand_landmarks[0]
+
+    landmarks = []
+    for lm in hand_landmarks.landmark:
+        landmarks.extend([lm.x, lm.y, lm.z])
+
+    # Normalize
+    landmarks = np.array(landmarks)
+    landmarks = landmarks - np.mean(landmarks)
+    landmarks = landmarks / (np.std(landmarks) + 1e-6)
+
+    return landmarks
+
+
+print("🚀 Extracting landmarks...")
+
+for label in os.listdir(DATASET_DIR):
+    label_path = os.path.join(DATASET_DIR, label)
     if not os.path.isdir(label_path):
         continue
 
-    for img_name in os.listdir(label_path):
-        img_path = os.path.join(label_path, img_name)
-        img = cv2.imread(img_path)
-        if img is None:
+    for root, _, files in os.walk(label_path):
+
+     for img_name in files:
+        if not img_name.lower().endswith(('.jpg', '.png')):
             continue
 
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        result = hands.process(img_rgb)
+        img_path = os.path.join(root, img_name)
 
-        if not result.multi_hand_landmarks:
+        features = extract_landmarks(img_path)
+        if features is None:
             continue
 
-        hand = result.multi_hand_landmarks[0]
-        landmarks = np.array([[lm.x, lm.y, lm.z] for lm in hand.landmark])
-        X.append(normalize(landmarks))
+        X.append(features)
         y.append(label)
 
-os.makedirs(OUTPUT_PATH, exist_ok=True)
-np.save(f"{OUTPUT_PATH}/X.npy", np.array(X))
-np.save(f"{OUTPUT_PATH}/y.npy", np.array(y))
 
-print("✅ Landmark extraction completed")
-print("Samples:", len(X))
+X = np.array(X)
+y = np.array(y)
+
+with open(OUTPUT_FILE, "wb") as f:
+    pickle.dump((X, y), f)
+
+print("✅ DONE")
+print(f"Total samples: {len(X)}")
+print(f"Feature shape: {X.shape}")
