@@ -1,31 +1,46 @@
-import numpy as np
-from sklearn.preprocessing import LabelEncoder
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.utils import to_categorical
+import pickle
 
-X = np.load("dataset_processed/X.npy")
-y = np.load("dataset_processed/y.npy")
+with open("features.pkl", "rb") as f:
+    X, y = pickle.load(f)
 
-le = LabelEncoder()
-y_enc = le.fit_transform(y)
-y_cat = to_categorical(y_enc)
+print("Features loaded:", len(X))
+print("Feature length of one sample:", len(X[0]))
+from sklearn.model_selection import train_test_split
 
-model = Sequential([
-    Dense(128, activation="relu", input_shape=(42,)),
-    Dense(64, activation="relu"),
-    Dense(y_cat.shape[1], activation="softmax")
-])
-
-model.compile(
-    optimizer="adam",
-    loss="categorical_crossentropy",
-    metrics=["accuracy"]
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
 )
 
-model.fit(X, y_cat, epochs=25, batch_size=32, validation_split=0.2)
+print("Train samples:", len(X_train))
+print("Test samples:", len(X_test))
+from sklearn.neural_network import MLPClassifier
 
-model.save("model/asl_mlp.h5")
-np.save("model/labels.npy", le.classes_)
+model = MLPClassifier(
+    hidden_layer_sizes=(64, 32),
+    activation="relu",
+    solver="adam",
+    max_iter=500,
+    random_state=42
+)
 
-print("✅ Model trained & saved")
+print("MLP model created")
+
+model.fit(X_train, y_train)
+print("Model training completed")
+
+from sklearn.metrics import accuracy_score
+
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+
+print("Accuracy:", accuracy)
+
+import pickle
+
+with open("gesture_model.pkl", "wb") as f:
+    pickle.dump(model, f)
+
+print("gesture_model.pkl saved")
