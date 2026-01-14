@@ -1,46 +1,47 @@
-import pickle
-
-with open("features.pkl", "rb") as f:
-    X, y = pickle.load(f)
-
-print("Features loaded:", len(X))
-print("Feature length of one sample:", len(X[0]))
+import numpy as np
 from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.utils import to_categorical
 
+# Load landmark data
+X = np.load("landmarks.npy")
+y = np.load("labels.npy")
+
+# One-hot encode labels
+y = to_categorical(y, num_classes=29)
+
+# Train-test split
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y,
-    test_size=0.2,
-    random_state=42,
-    stratify=y
+    X, y, test_size=0.2, random_state=42
 )
 
-print("Train samples:", len(X_train))
-print("Test samples:", len(X_test))
-from sklearn.neural_network import MLPClassifier
+# Model architecture
+model = Sequential([
+    Dense(128, activation="relu", input_shape=(63,)),
+    Dropout(0.3),
+    Dense(64, activation="relu"),
+    Dense(29, activation="softmax")
+])
 
-model = MLPClassifier(
-    hidden_layer_sizes=(64, 32),
-    activation="relu",
-    solver="adam",
-    max_iter=500,
-    random_state=42
+# Compile model
+model.compile(
+    optimizer="adam",
+    loss="categorical_crossentropy",
+    metrics=["accuracy"]
 )
 
-print("MLP model created")
+# Train
+model.fit(
+    X_train,
+    y_train,
+    epochs=50,
+    batch_size=32,
+    validation_data=(X_test, y_test)
+)
 
-model.fit(X_train, y_train)
-print("Model training completed")
+# Save model
+model.save("sign_language_model.h5")
 
-from sklearn.metrics import accuracy_score
+print("✅ Model trained and saved successfully!")
 
-y_pred = model.predict(X_test)
-accuracy = accuracy_score(y_test, y_pred)
-
-print("Accuracy:", accuracy)
-
-import pickle
-
-with open("gesture_model.pkl", "wb") as f:
-    pickle.dump(model, f)
-
-print("gesture_model.pkl saved")

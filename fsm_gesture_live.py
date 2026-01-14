@@ -1,85 +1,55 @@
 import cv2
 import mediapipe as mp
-import math
+import numpy as np
+import joblib
+import pyttsx3
 import time
-from collections import deque
+import joblib
 
-gesture_buffer = deque(maxlen=10)
-stable_gesture = None
+MODEL_PATH = "models/word_gesture_model.pkl"
+model = joblib.load(MODEL_PATH)
 
+print("✅ Gesture model loaded")
+def landmarks_to_feature_vector(landmarks):
+    return np.array([[coord for lm in landmarks for coord in (lm.x, lm.y, lm.z)]])
+
+# ---------------- CONFIG ----------------
+MODEL_PATH = "models/word_gesture_model.pkl"
+CONF_THRESHOLD = 0.75
+STABLE_FRAMES = 3
+COOLDOWN_TIME = 1.0  # seconds
+# ----------------------------------------
+
+# Load model
+model = joblib.load(MODEL_PATH)
+
+# TTS
+engine = pyttsx3.init()
+engine.setProperty("rate", 150)
+
+def speak(text):
+    engine.say(text)
+    engine.runAndWait()
+
+# MediaPipe
 mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
 
 hands = mp_hands.Hands(
     static_image_mode=False,
-    max_num_hands=2,
+    max_num_hands=1,
     min_detection_confidence=0.6,
     min_tracking_confidence=0.6
 )
 
 cap = cv2.VideoCapture(0)
 
+# Stability state
 last_gesture = None
-gesture_hold_time = 0
-GESTURE_STABLE_TIME = 0.8  # seconds
+same_count = 0
+last_spoken_time = 0
 
-def distance(a, b):
-    return math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2)
-
-def detect_gesture(landmarks):
-    index_tip = landmarks[8]
-    middle_tip = landmarks[12]
-    ring_tip = landmarks[16]
-    pinky_tip = landmarks[20]
-
-    index_mcp = landmarks[5]
-    middle_mcp = landmarks[9]
-    ring_mcp = landmarks[13]
-    pinky_mcp = landmarks[17]
-
-    wrist = landmarks[0]
-
-    # FIST: all finger tips clearly BELOW wrist
-    fist = (
-        index_tip.y > wrist.y + 0.03 and
-        middle_tip.y > wrist.y + 0.03 and
-        ring_tip.y > wrist.y + 0.03 and
-        pinky_tip.y > wrist.y + 0.03
-    )
-
-    if fist:
-        return "FIST"
-
-    # OPEN PALM: all finger tips clearly ABOVE MCP
-    open_palm = (
-        index_tip.y < index_mcp.y - 0.02 and
-        middle_tip.y < middle_mcp.y - 0.02 and
-        ring_tip.y < ring_mcp.y - 0.02 and
-        pinky_tip.y < pinky_mcp.y - 0.02
-    )
-
-    if open_palm:
-        return "OPEN_PALM"
-
-    return None
-
-    
-def get_stable_gesture(buffer):
-    if len(buffer) < buffer.maxlen:
-        return None
-
-    counts = {}
-    for g in buffer:
-        if g is None:
-            return None
-        counts[g] = counts.get(g, 0) + 1
-
-    for gesture, count in counts.items():
-        if count >= 7:
-            return gesture
-
-    return None
-
+# ---------------- MAIN LOOP ----------------
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -89,41 +59,78 @@ while True:
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(rgb)
 
-    current_time = time.time()
+    gesture = None
+    conf = 0.0
 
     if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
-            mp_draw.draw_landmarks(
-                frame,
-                hand_landmarks,
-                mp_hands.HAND_CONNECTIONS
-            )
+        lm = results.multi_hand_landmarks[0].landmark
 
-            gesture = detect_gesture(hand_landmarks.landmark)
-            gesture_buffer.append(gesture)
+        mp_draw.draw_landmarks(
+            frame,
+            results.multi_hand_landmarks[0],
+            mp_hands.HAND_CONNECTIONS
+        )
 
-            #if gesture == last_gesture:
-                #if current_time - gesture_hold_time >= GESTURE_STABLE_TIME:
-                    #cv2.putText(frame, f"Gesture: {gesture}", (30, 60),
-                                #cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            #else:
-                #last_gesture = gesture
-                #gesture_hold_time = current_time
+        # Extract features
+        features = []
+        for p in lm:
+            features.extend([p.x, p.y, p.z])
 
-            new_stable = get_stable_gesture(gesture_buffer)
+        features = np.array(features).reshape(1, -1)
 
-            if new_stable and new_stable != stable_gesture:
-              stable_gesture = new_stable
+        # ML prediction
+        probs = model.predict_proba(features)[0]
+        pred = model.classes_[np.argmax(probs)]
+        conf = np.max(probs)
 
-            if stable_gesture:
-               cv2.putText(frame, f"Gesture: {stable_gesture}", (30, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        if conf > CONF_THRESHOLD:
+            gesture = pred
+        hand_landmarks = results.multi_hand_landmarks[0]
+        mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-    cv2.imshow("Day 7 - FSM Gesture Detection", frame)
+        X_live = landmarks_to_feature_vector(hand_landmarks.landmark)
+        pred = model.predict(X_live)[0]
+        confidence = np.max(model.predict_proba(X_live))
+
+        if confidence > 0.7:   # safe threshold
+          gesture = pred
+        else:
+          gesture = None
+
+    # ---------------- STABILITY ----------------
+    if gesture is None:
+        same_count = 0
+        last_gesture = None
+    else:
+        if gesture == last_gesture:
+            same_count += 1
+        else:
+            same_count = 1
+            last_gesture = gesture
+
+        if same_count == STABLE_FRAMES:
+            now = time.time()
+            if now - last_spoken_time > COOLDOWN_TIME:
+                print(f"DETECTED: {gesture} ({conf:.2f})")
+                speak(gesture)
+                last_spoken_time = now
+
+    # ---------------- UI ----------------
+    if gesture:
+        cv2.putText(
+            frame,
+            f"{gesture} ({conf:.2f})",
+            (30, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 0),
+            2
+        )
+
+    cv2.imshow("FSM Gesture Live (ML Powered)", frame)
 
     if cv2.waitKey(1) & 0xFF == 27:
         break
 
 cap.release()
 cv2.destroyAllWindows()
-
