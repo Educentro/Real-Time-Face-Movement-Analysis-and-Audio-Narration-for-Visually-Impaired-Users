@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["mesa", "glib", "libGL"]
+nixPkgs = ["python311", "mesa", "glib", "libGL"]
 
 [start]
 cmd = "python app.py"
