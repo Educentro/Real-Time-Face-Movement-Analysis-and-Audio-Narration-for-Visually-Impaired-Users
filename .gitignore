@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+
+*.h5
+
+# Large datasets
+dataset/
+
+# OS
+.DS_Store
