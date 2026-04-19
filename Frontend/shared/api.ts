@@ -28,3 +28,18 @@ export interface HealthCheckResponse {
     word: boolean;
   };
 }
+
+export interface InferFrameRequest {
+  image: string;
+}
+
+export interface InferFrameResponse {
+  status: "ok" | "error";
+  detected_label?: string | null;
+  narration_text?: string | null;
+  hand_present?: boolean;
+  gesture_locked?: boolean;
+  last_detection?: string | null;
+  current_mode?: "WORD" | "ALPHABET";
+  message?: string;
+}

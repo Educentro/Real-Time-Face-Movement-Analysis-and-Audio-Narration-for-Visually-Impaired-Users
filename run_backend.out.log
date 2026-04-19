@@ -1,0 +1,18 @@
+Loading models...
+[OK] Word model loaded
+[ERROR] Alphabet model failed: File not found: filepath=alphabet_model.keras. Please ensure the file is an accessible `.keras` zip file.
+[INFO] Using default word labels (dataset folder not found)
+[INFO] Loaded 28 word labels, 26 alphabet labels
+
+======================================================================
+DUAL-MODEL SIGN LANGUAGE SYSTEM
+======================================================================
+Alphabet model: [ERROR]
+Word model: [OK]
+LLM enabled: [OFF]
+Word labels: 28
+Alphabet labels: 26
+Running on: 0.0.0.0:5000
+======================================================================
+ * Serving Flask app 'app'
+ * Debug mode: off

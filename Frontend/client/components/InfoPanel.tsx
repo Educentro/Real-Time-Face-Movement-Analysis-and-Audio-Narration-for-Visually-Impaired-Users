@@ -1,6 +1,7 @@
 import { useSystemStatus, useHealthCheck } from "@/hooks/use-flask-api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { config } from "@/lib/config";
 
 interface Feature {
   icon: string;
@@ -12,7 +13,7 @@ const FEATURES: Feature[] = [
   {
     icon: "🔤",
     title: "Alphabet Recognition",
-    description: "Detects A-Z letters with high accuracy",
+    description: "Detects the alphabet classes available in the deployed backend model",
   },
   {
     icon: "📝",
@@ -34,6 +35,11 @@ const FEATURES: Feature[] = [
 export default function InfoPanel() {
   const { data: status, isLoading, isError } = useSystemStatus();
   const { data: health } = useHealthCheck();
+  const isMissingProductionApiUrl = !import.meta.env.DEV && !config.usingEnvApiUrl;
+  const supportedAlphabetLabels = status?.alphabet_labels ?? [];
+  const alphabetSummary = supportedAlphabetLabels.length
+    ? supportedAlphabetLabels.join(", ")
+    : "No alphabet labels loaded";
 
   const backendOnline = health?.status === "healthy";
 
@@ -73,8 +79,13 @@ export default function InfoPanel() {
       {isError && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
           <p className="text-sm text-red-600">
-            Cannot connect to backend. Make sure Flask server is running on port 5000.
+            Cannot connect to backend at {config.flaskApiUrl}.
           </p>
+          {isMissingProductionApiUrl && (
+            <p className="text-xs text-amber-700 mt-1">
+              Set VITE_FLASK_API_URL in Vercel Project Settings to your Flask backend URL.
+            </p>
+          )}
         </div>
       )}
 
@@ -139,12 +150,15 @@ export default function InfoPanel() {
           <p className="text-sm font-semibold text-gray-700 mb-2">Available Labels</p>
           <div className="flex gap-4 text-sm">
             <span className="text-purple-600">
-              🔤 Alphabet: {status.alphabet_labels?.length || 26}
+              🔤 Alphabet: {status.alphabet_labels?.length || 0}
             </span>
             <span className="text-green-600">
               📝 Words: {status.word_labels?.length || 0}
             </span>
           </div>
+          <p className="text-xs text-gray-600 mt-2">
+            Supported alphabet labels: {alphabetSummary}
+          </p>
           {status.llm_cache_size > 0 && (
             <p className="text-xs text-gray-500 mt-2">
               LLM Cache: {status.llm_cache_size} responses

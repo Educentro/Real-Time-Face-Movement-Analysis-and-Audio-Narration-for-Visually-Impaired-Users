@@ -8,7 +8,7 @@ Company-grade live demo system with:
 - Flask video streaming
 """
 
-from flask import Flask, render_template, Response, jsonify
+from flask import Flask, render_template, Response, jsonify, request
 from flask_cors import CORS
 import cv2
 import mediapipe as mp
@@ -23,6 +23,7 @@ import requests
 from queue import Queue
 from dataclasses import dataclass
 from typing import Optional, Tuple
+import base64
 
 DETECTION_MODE = "WORD"
 
@@ -30,12 +31,12 @@ DETECTION_MODE = "WORD"
 @dataclass
 class Config:
     # Model confidence thresholds
-    ALPHABET_CONFIDENCE_THRESHOLD = 0.70  # Higher for alphabet (static poses)
-    WORD_CONFIDENCE_THRESHOLD = 0.50      # Lower for words (dynamic gestures)
+    ALPHABET_CONFIDENCE_THRESHOLD = 0.55  # Lowered for cloud frame-based inference
+    WORD_CONFIDENCE_THRESHOLD = 0.35      # Lowered for cloud frame-based inference
     
     # Stability requirements
-    ALPHABET_STABLE_FRAMES = 5   # Faster for alphabet (static)
-    WORD_STABLE_FRAMES = 8       # Slower for words (temporal)
+    ALPHABET_STABLE_FRAMES = 3   # Reduced for lower-latency API inference
+    WORD_STABLE_FRAMES = 4       # Reduced for lower-latency API inference
     BUFFER_SIZE = 15
     
     # Gesture locking
@@ -75,8 +76,13 @@ try:
     alphabet_model = load_model("alphabet_model.keras")
     print("[OK] Alphabet model loaded")
 except Exception as e:
-    print(f"[ERROR] Alphabet model failed: {e}")
-    alphabet_model = None
+    print(f"[WARN] Alphabet model (alphabet_model.keras) failed: {e}")
+    try:
+        alphabet_model = load_model("model/asl_mlp.h5")
+        print("[OK] Alphabet fallback model loaded from model/asl_mlp.h5")
+    except Exception as fallback_error:
+        print(f"[ERROR] Alphabet fallback model failed: {fallback_error}")
+        alphabet_model = None
 
 # Load labels
 try:
@@ -99,6 +105,14 @@ except Exception as e:
     print(f"[WARN] Error loading labels: {e}")
 
 ALPHABET_LABELS = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
+if alphabet_model is not None and os.path.exists("model/labels.npy"):
+    try:
+        loaded_alphabet_labels = np.load("model/labels.npy", allow_pickle=True).tolist()
+        if loaded_alphabet_labels and isinstance(loaded_alphabet_labels, list):
+            ALPHABET_LABELS = [str(label) for label in loaded_alphabet_labels]
+            print(f"[INFO] Using alphabet labels from model/labels.npy ({len(ALPHABET_LABELS)})")
+    except Exception as e:
+        print(f"[WARN] Could not load model/labels.npy: {e}")
 
 print(f"[INFO] Loaded {len(WORD_LABELS)} word labels, {len(ALPHABET_LABELS)} alphabet labels")
 
@@ -299,11 +313,20 @@ def predict_alphabet(landmarks: np.ndarray) -> Optional[Prediction]:
         return None
     
     try:
-        pred = alphabet_model.predict(landmarks, verbose=0)[0]
+        expected_dim = int(alphabet_model.input_shape[-1])
+        if landmarks.shape[1] == expected_dim:
+            model_input = landmarks
+        elif landmarks.shape[1] == 63 and expected_dim == 42:
+            # Fallback model expects x/y only, but live extraction has x/y/z.
+            model_input = landmarks.reshape(1, 21, 3)[:, :, :2].reshape(1, 42)
+        else:
+            return None
+
+        pred = alphabet_model.predict(model_input, verbose=0)[0]
         confidence = float(np.max(pred))
         label_id = int(np.argmax(pred))
         
-        if confidence >= config.ALPHABET_CONFIDENCE_THRESHOLD:
+        if confidence >= config.ALPHABET_CONFIDENCE_THRESHOLD and label_id < len(ALPHABET_LABELS):
             return Prediction(
                 label=ALPHABET_LABELS[label_id],
                 confidence=confidence,
@@ -666,6 +689,46 @@ def health():
             'word': word_model is not None
         }
     })
+
+
+@app.route('/api/infer_frame', methods=['POST'])
+def infer_frame():
+    """Run inference on a single client-provided frame."""
+    payload = request.get_json(silent=True) or {}
+    image_data = payload.get("image")
+    if not image_data:
+        print(f"[DEBUG] Missing image payload. Raw data length: {len(request.data)}")
+        return jsonify({"status": "error", "message": "Missing image payload"}), 400
+
+    try:
+        if "," in image_data:
+            image_data = image_data.split(",", 1)[1]
+
+        frame_bytes = base64.b64decode(image_data)
+        np_frame = np.frombuffer(frame_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(np_frame, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            print("[DEBUG] cv2.imdecode returned None")
+            return jsonify({"status": "error", "message": "Invalid image data"}), 400
+
+        # Match training/inference orientation used in local webcam path.
+        frame = cv2.flip(frame, 1)
+
+        small = cv2.resize(frame, (640, 480))
+        _, detected_label, narration_text = process_frame(small)
+
+        return jsonify({
+            "status": "ok",
+            "detected_label": detected_label,
+            "narration_text": narration_text,
+            "hand_present": state.hand_present,
+            "gesture_locked": state.is_locked(),
+            "last_detection": state.last_detection,
+            "current_mode": DETECTION_MODE
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Inference failed: {e}"}), 500
 
 
 # FOR RUNNING APPLICATION
