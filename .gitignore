@@ -3,13 +3,22 @@ __pycache__/
 *.pyc
 .env
 
-*.h5
-
-# Large datasets
+# Large datasets (not needed for deployment)
 dataset/
+dataset_processed/
+X.npy
+y.npy
 
 # OS
 .DS_Store
 
 # Local Netlify folder
 .netlify
+
+# Node modules
+Frontend/node_modules/
+
+# Logs
+*.log
+*.err.log
+*.out.log

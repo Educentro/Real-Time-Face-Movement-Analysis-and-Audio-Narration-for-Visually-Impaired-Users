@@ -1,14 +1,11 @@
 services:
   - type: web
-    name: sign-language-backend
-    runtime: python
+    name: sign-language-recognition
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: PORT
         value: 10000
       - key: HOST
         value: 0.0.0.0
-      - key: PYTHON_VERSION
-        value: 3.11.0

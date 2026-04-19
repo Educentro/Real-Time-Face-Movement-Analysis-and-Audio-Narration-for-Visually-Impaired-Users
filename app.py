@@ -61,7 +61,12 @@ config = Config()
 
 
 # FLASK APP
-app = Flask(__name__)
+# In production, serve the built React frontend from static_frontend/
+static_dir = os.path.join(os.path.dirname(__file__), 'static_frontend')
+if os.path.exists(static_dir):
+    app = Flask(__name__, static_folder=static_dir, static_url_path='')
+else:
+    app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 print("Loading models...")
 
@@ -729,6 +734,25 @@ def infer_frame():
         })
     except Exception as e:
         return jsonify({"status": "error", "message": f"Inference failed: {e}"}), 500
+
+
+# Catch-all route: serve React frontend for any non-API path
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    # If the request is for an API route, let it fall through (already handled above)
+    if path.startswith(('api/', 'status', 'set_mode', 'video', 'flask')):
+        return jsonify({"error": "Not found"}), 404
+    # Try to serve the file from static_frontend
+    if app.static_folder:
+        file_path = os.path.join(app.static_folder, path)
+        if path and os.path.exists(file_path):
+            return app.send_static_file(path)
+        # For SPA routing, always return index.html
+        index_path = os.path.join(app.static_folder, 'index.html')
+        if os.path.exists(index_path):
+            return app.send_static_file('index.html')
+    return jsonify({"status": "ok", "message": "Sign Language Recognition API"})
 
 
 # FOR RUNNING APPLICATION
