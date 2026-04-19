@@ -1,12 +1,45 @@
 /**
- * Shared code between client and server
- * Useful to share types between client and server
- * and/or small pure JS functions that can be used on both client and server
+ * Shared types for Flask backend API integration
  */
 
-/**
- * Example response type for /api/demo
- */
-export interface DemoResponse {
-  message: string;
+export interface SystemStatus {
+  alphabet_model: boolean;
+  word_model: boolean;
+  hand_present: boolean;
+  gesture_locked: boolean;
+  last_detection: string | null;
+  llm_enabled: boolean;
+  llm_cache_size: number;
+  current_mode: "WORD" | "ALPHABET";
+  word_labels: string[];
+  alphabet_labels: string[];
+}
+
+export interface ModeChangeResponse {
+  status: "ok" | "error";
+  mode?: "WORD" | "ALPHABET";
+  message?: string;
+}
+
+export interface HealthCheckResponse {
+  status: "healthy" | "unhealthy";
+  models: {
+    alphabet: boolean;
+    word: boolean;
+  };
+}
+
+export interface InferFrameRequest {
+  image: string;
+}
+
+export interface InferFrameResponse {
+  status: "ok" | "error";
+  detected_label?: string | null;
+  narration_text?: string | null;
+  hand_present?: boolean;
+  gesture_locked?: boolean;
+  last_detection?: string | null;
+  current_mode?: "WORD" | "ALPHABET";
+  message?: string;
 }

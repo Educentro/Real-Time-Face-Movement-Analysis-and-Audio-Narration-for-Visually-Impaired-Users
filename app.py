@@ -8,7 +8,8 @@ Company-grade live demo system with:
 - Flask video streaming
 """
 
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, jsonify, request
+from flask_cors import CORS
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -22,6 +23,7 @@ import requests
 from queue import Queue
 from dataclasses import dataclass
 from typing import Optional, Tuple
+import base64
 
 DETECTION_MODE = "WORD"
 
@@ -29,12 +31,12 @@ DETECTION_MODE = "WORD"
 @dataclass
 class Config:
     # Model confidence thresholds
-    ALPHABET_CONFIDENCE_THRESHOLD = 0.70  # Higher for alphabet (static poses)
-    WORD_CONFIDENCE_THRESHOLD = 0.50      # Lower for words (dynamic gestures)
+    ALPHABET_CONFIDENCE_THRESHOLD = 0.55  # Lowered for cloud frame-based inference
+    WORD_CONFIDENCE_THRESHOLD = 0.35      # Lowered for cloud frame-based inference
     
     # Stability requirements
-    ALPHABET_STABLE_FRAMES = 5   # Faster for alphabet (static)
-    WORD_STABLE_FRAMES = 8       # Slower for words (temporal)
+    ALPHABET_STABLE_FRAMES = 3   # Reduced for lower-latency API inference
+    WORD_STABLE_FRAMES = 4       # Reduced for lower-latency API inference
     BUFFER_SIZE = 15
     
     # Gesture locking
@@ -59,32 +61,65 @@ config = Config()
 
 
 # FLASK APP
-app = Flask(__name__)
+# In production, serve the built React frontend from static_frontend/
+static_dir = os.path.join(os.path.dirname(__file__), 'static_frontend')
+if os.path.exists(static_dir):
+    app = Flask(__name__, static_folder=static_dir, static_url_path='')
+else:
+    app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 print("Loading models...")
 
 try:
     word_model = load_model("frame_model.keras")
-    print("✅ Word model loaded")
+    print("[OK] Word model loaded")
 except Exception as e:
-    print(f"❌ Word model failed: {e}")
+    print(f"[ERROR] Word model failed: {e}")
     word_model = None
 
 try:
     alphabet_model = load_model("alphabet_model.keras")
-    print("✅ Alphabet model loaded")
+    print("[OK] Alphabet model loaded")
 except Exception as e:
-    print(f"❌ Alphabet model failed: {e}")
-    alphabet_model = None
+    print(f"[WARN] Alphabet model (alphabet_model.keras) failed: {e}")
+    try:
+        alphabet_model = load_model("model/asl_mlp.h5")
+        print("[OK] Alphabet fallback model loaded from model/asl_mlp.h5")
+    except Exception as fallback_error:
+        print(f"[ERROR] Alphabet fallback model failed: {fallback_error}")
+        alphabet_model = None
 
 # Load labels
-WORD_LABELS = sorted([
-    d for d in os.listdir("dataset")
-    if os.path.isdir(os.path.join("dataset", d))
-])
+try:
+    if os.path.exists("dataset"):
+        WORD_LABELS = sorted([
+            d for d in os.listdir("dataset")
+            if os.path.isdir(os.path.join("dataset", d))
+        ])
+    else:
+        WORD_LABELS = [
+            "HELLO", "YOU", "NAME", "THANK_YOU", "WELCOME", "GOODBYE",
+            "MORNING", "AFTERNOON", "NIGHT", "PLEASE", "SORRY", "YES",
+            "NO", "STOP", "WAIT", "HELP", "I'M_HUNGRY", "I'M_THIRSTY",
+            "I'M_TIRED", "I'M_BUSY", "I'M_BORED", "EAT", "WHAT", "WHEN",
+            "FATHER", "MOTHER", "FRIEND", "MY"
+        ]
+        print("[INFO] Using default word labels (dataset folder not found)")
+except Exception as e:
+    WORD_LABELS = ["HELLO", "THANK_YOU", "YES", "NO", "PLEASE", "SORRY"]
+    print(f"[WARN] Error loading labels: {e}")
 
 ALPHABET_LABELS = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
+if alphabet_model is not None and os.path.exists("model/labels.npy"):
+    try:
+        loaded_alphabet_labels = np.load("model/labels.npy", allow_pickle=True).tolist()
+        if loaded_alphabet_labels and isinstance(loaded_alphabet_labels, list):
+            ALPHABET_LABELS = [str(label) for label in loaded_alphabet_labels]
+            print(f"[INFO] Using alphabet labels from model/labels.npy ({len(ALPHABET_LABELS)})")
+    except Exception as e:
+        print(f"[WARN] Could not load model/labels.npy: {e}")
 
-print(f"📊 Loaded {len(WORD_LABELS)} word labels, {len(ALPHABET_LABELS)} alphabet labels")
+print(f"[INFO] Loaded {len(WORD_LABELS)} word labels, {len(ALPHABET_LABELS)} alphabet labels")
 
 
 # MEDIAPIPE SETUP (SHARED)
@@ -203,7 +238,7 @@ def speak_async(text: str):
                 timeout=10
             )
         except Exception as e:
-            print(f"⚠️ TTS error: {e}")
+            print(f"[WARN] TTS error: {e}")
     
     threading.Thread(target=_run, daemon=True).start()
 
@@ -244,7 +279,7 @@ def llm_polish(sentence: str) -> str:
             return sentence
             
     except Exception as e:
-        print(f"⚠️ LLM error: {e}")
+        print(f"[WARN] LLM error: {e}")
         return sentence
 
 def narration_worker():
@@ -283,18 +318,27 @@ def predict_alphabet(landmarks: np.ndarray) -> Optional[Prediction]:
         return None
     
     try:
-        pred = alphabet_model.predict(landmarks, verbose=0)[0]
+        expected_dim = int(alphabet_model.input_shape[-1])
+        if landmarks.shape[1] == expected_dim:
+            model_input = landmarks
+        elif landmarks.shape[1] == 63 and expected_dim == 42:
+            # Fallback model expects x/y only, but live extraction has x/y/z.
+            model_input = landmarks.reshape(1, 21, 3)[:, :, :2].reshape(1, 42)
+        else:
+            return None
+
+        pred = alphabet_model.predict(model_input, verbose=0)[0]
         confidence = float(np.max(pred))
         label_id = int(np.argmax(pred))
         
-        if confidence >= config.ALPHABET_CONFIDENCE_THRESHOLD:
+        if confidence >= config.ALPHABET_CONFIDENCE_THRESHOLD and label_id < len(ALPHABET_LABELS):
             return Prediction(
                 label=ALPHABET_LABELS[label_id],
                 confidence=confidence,
                 model_type="alphabet"
             )
     except Exception as e:
-        print(f"⚠️ Alphabet prediction error: {e}")
+        print(f"[WARN] Alphabet prediction error: {e}")
     
     return None
 
@@ -314,7 +358,7 @@ def predict_word(landmarks: np.ndarray) -> Optional[Prediction]:
                 model_type="word"
             )
     except Exception as e:
-        print(f"⚠️ Word prediction error: {e}")
+        print(f"[WARN] Word prediction error: {e}")
     
     return None
 
@@ -408,18 +452,24 @@ def process_frame(frame: np.ndarray) -> Tuple[np.ndarray, Optional[str], Optiona
         if len(landmarks) != 63:
             return frame, None, None
         
-        landmarks_array = np.array(landmarks, dtype=np.float32).reshape(1, -1)
+        landmarks_raw = np.array(landmarks, dtype=np.float32).reshape(1, -1)
+        
+        # Normalized version for alphabet model (trained with normalization)
+        landmarks_norm = np.array(landmarks, dtype=np.float32)
+        landmarks_norm = landmarks_norm - np.mean(landmarks_norm)
+        landmarks_norm = landmarks_norm / (np.std(landmarks_norm) + 1e-6)
+        landmarks_norm = landmarks_norm.reshape(1, -1)
         
         
         # DUAL MODEL PREDICTION
         
         # Get predictions from both models
         if DETECTION_MODE == "ALPHABET":
-            chosen_pred = predict_alphabet(landmarks_array)
+            chosen_pred = predict_alphabet(landmarks_norm)
             state.word_buffer.clear()
 
         elif DETECTION_MODE == "WORD":
-            chosen_pred = predict_word(landmarks_array)
+            chosen_pred = predict_word(landmarks_raw)
             state.alphabet_buffer.clear()
 
 
@@ -481,7 +531,7 @@ def process_frame(frame: np.ndarray) -> Tuple[np.ndarray, Optional[str], Optiona
                 # Queue narration
                 narration_queue.put((narration_text, use_llm))
                 
-                print(f"✅ Detected: {detected_label} ({chosen_pred.model_type}, conf={chosen_pred.confidence:.2f})")
+                print(f"[DETECTED] {detected_label} ({chosen_pred.model_type}, conf={chosen_pred.confidence:.2f})")
     
     else:
         # NO HAND DETECTED
@@ -618,36 +668,119 @@ def video():
 @app.route('/status')
 def status():
     """API endpoint for system status"""
-    return {
+    return jsonify({
         'alphabet_model': alphabet_model is not None,
         'word_model': word_model is not None,
         'hand_present': state.hand_present,
         'gesture_locked': state.is_locked(),
         'last_detection': state.last_detection,
         'llm_enabled': config.USE_LLM,
-        'llm_cache_size': len(llm_cache)
-    }
+        'llm_cache_size': len(llm_cache),
+        'current_mode': DETECTION_MODE,
+        'word_labels': WORD_LABELS,
+        'alphabet_labels': ALPHABET_LABELS
+    })
 
 @app.route("/set_mode/<mode>")
 def set_mode(mode):
     global DETECTION_MODE
     if mode.upper() in ["WORD", "ALPHABET"]:
         DETECTION_MODE = mode.upper()
-        return {"status": "ok", "mode": DETECTION_MODE}
-    return {"status": "error"}
+        state.reset_buffers()
+        return jsonify({"status": "ok", "mode": DETECTION_MODE})
+    return jsonify({"status": "error", "message": "Invalid mode"}), 400
+
+@app.route('/api/health')
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'models': {
+            'alphabet': alphabet_model is not None,
+            'word': word_model is not None
+        }
+    })
+
+
+@app.route('/api/infer_frame', methods=['POST'])
+def infer_frame():
+    """Run inference on a single client-provided frame."""
+    payload = request.get_json(silent=True) or {}
+    image_data = payload.get("image")
+    if not image_data:
+        print(f"[DEBUG] Missing image payload. Raw data length: {len(request.data)}")
+        return jsonify({"status": "error", "message": "Missing image payload"}), 400
+
+    try:
+        if "," in image_data:
+            image_data = image_data.split(",", 1)[1]
+
+        frame_bytes = base64.b64decode(image_data)
+        np_frame = np.frombuffer(frame_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(np_frame, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            print("[DEBUG] cv2.imdecode returned None")
+            return jsonify({"status": "error", "message": "Invalid image data"}), 400
+
+        # Match training/inference orientation used in local webcam path.
+        frame = cv2.flip(frame, 1)
+
+        small = cv2.resize(frame, (640, 480))
+        _, detected_label, narration_text = process_frame(small)
+
+        return jsonify({
+            "status": "ok",
+            "detected_label": detected_label,
+            "narration_text": narration_text,
+            "hand_present": state.hand_present,
+            "gesture_locked": state.is_locked(),
+            "last_detection": state.last_detection,
+            "current_mode": DETECTION_MODE
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"Inference failed: {e}"}), 500
+
+
+# Catch-all route: serve React frontend for any non-API path
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    # If the request is for an API route, let it fall through (already handled above)
+    if path.startswith(('api/', 'status', 'set_mode', 'video', 'flask')):
+        return jsonify({"error": "Not found"}), 404
+    # Try to serve the file from static_frontend
+    if app.static_folder:
+        file_path = os.path.join(app.static_folder, path)
+        if path and os.path.exists(file_path):
+            return app.send_static_file(path)
+        # For SPA routing, always return index.html
+        index_path = os.path.join(app.static_folder, 'index.html')
+        if os.path.exists(index_path):
+            return app.send_static_file('index.html')
+    return jsonify({"status": "ok", "message": "Sign Language Recognition API"})
 
 
 # FOR RUNNING APPLICATION
 
 if __name__ == "__main__":
+    import os as _os
+    
+    port = int(_os.environ.get("PORT", 5000))
+    host = _os.environ.get("HOST", "0.0.0.0")
+    debug = _os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    
     print("\n" + "="*70)
-    print("🚀 DUAL-MODEL SIGN LANGUAGE SYSTEM")
+    print("DUAL-MODEL SIGN LANGUAGE SYSTEM")
     print("="*70)
-    print(f"Alphabet model: {'✅' if alphabet_model else '❌'}")
-    print(f"Word model: {'✅' if word_model else '❌'}")
-    print(f"LLM enabled: {'✅' if config.USE_LLM else '❌'}")
+    print(f"Alphabet model: {'[OK]' if alphabet_model else '[ERROR]'}")
+    print(f"Word model: {'[OK]' if word_model else '[ERROR]'}")
+    print(f"LLM enabled: {'[OK]' if config.USE_LLM else '[OFF]'}")
     print(f"Word labels: {len(WORD_LABELS)}")
     print(f"Alphabet labels: {len(ALPHABET_LABELS)}")
+    print(f"Running on: {host}:{port}")
     print("="*70)
     
-    app.run(debug=True, threaded=True)
+    app.run(host=host, port=port, debug=debug, threaded=True)

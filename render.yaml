@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sign-language-recognition
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: HOST
+        value: 0.0.0.0

@@ -10,7 +10,7 @@ const INSTRUCTIONS: Instruction[] = [
   },
   {
     step: 2,
-    text: "Show an alphabet letter (A-Z) or word sign",
+    text: "Show a supported alphabet letter or a trained word sign",
   },
   {
     step: 3,
