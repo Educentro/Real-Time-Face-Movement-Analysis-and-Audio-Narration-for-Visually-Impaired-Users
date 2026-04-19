@@ -74,7 +74,7 @@ for label in tqdm(labels):
     files = [f for f in os.listdir(label_path) if f.lower().endswith(('.jpg', '.png'))]
     # To save time and avoid overfitting, take a subset (e.g., 500 images per class)
     # The original dataset has 3000 per class, which might take a long time to extract
-    files = files[:50] 
+    files = files[:200] 
     
     for img_name in files:
         img_path = os.path.join(label_path, img_name)

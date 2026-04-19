@@ -452,18 +452,24 @@ def process_frame(frame: np.ndarray) -> Tuple[np.ndarray, Optional[str], Optiona
         if len(landmarks) != 63:
             return frame, None, None
         
-        landmarks_array = np.array(landmarks, dtype=np.float32).reshape(1, -1)
+        landmarks_raw = np.array(landmarks, dtype=np.float32).reshape(1, -1)
+        
+        # Normalized version for alphabet model (trained with normalization)
+        landmarks_norm = np.array(landmarks, dtype=np.float32)
+        landmarks_norm = landmarks_norm - np.mean(landmarks_norm)
+        landmarks_norm = landmarks_norm / (np.std(landmarks_norm) + 1e-6)
+        landmarks_norm = landmarks_norm.reshape(1, -1)
         
         
         # DUAL MODEL PREDICTION
         
         # Get predictions from both models
         if DETECTION_MODE == "ALPHABET":
-            chosen_pred = predict_alphabet(landmarks_array)
+            chosen_pred = predict_alphabet(landmarks_norm)
             state.word_buffer.clear()
 
         elif DETECTION_MODE == "WORD":
-            chosen_pred = predict_word(landmarks_array)
+            chosen_pred = predict_word(landmarks_raw)
             state.alphabet_buffer.clear()
 
 
@@ -733,6 +739,8 @@ def infer_frame():
             "current_mode": DETECTION_MODE
         })
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "error", "message": f"Inference failed: {e}"}), 500
 
 
